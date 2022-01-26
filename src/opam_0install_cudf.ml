@@ -5,6 +5,7 @@ module Context = struct
     universe : Cudf.universe;
     constraints : (Cudf_types.pkgname * (Cudf_types.relop * Cudf_types.version)) list;
     version_rev_compare : Cudf.package -> Cudf.package -> int;
+    fresh_id : unit -> int;
   }
 
   let user_restrictions t name =
@@ -44,6 +45,8 @@ module Context = struct
 
   let pp_rejection f = function
     | UserConstraint (name, c) -> Format.fprintf f "Rejected by user-specified constraint %s%s" name (print_constr c)
+
+  let fresh_id {fresh_id; _} = fresh_id ()
 end
 
 module Input = Model.Make(Context)
@@ -51,7 +54,7 @@ module Input = Model.Make(Context)
 let requirements ~context pkgs =
   let role =
     let impl = Input.virtual_impl ~context ~depends:pkgs () in
-    Input.virtual_role [impl]
+    Input.virtual_role ~context [impl]
   in
   { Input.role; command = None }
 
@@ -70,11 +73,18 @@ let version_rev_compare ~prefer_oldest =
     fun pkg1 pkg2 ->
       Int.compare pkg2.Cudf.version pkg1.Cudf.version
 
+let create_fun_id_fun () =
+  let r = ref 0 in
+  fun () ->
+    Stdlib.incr r;
+    !r
+
 let create ?(prefer_oldest=false) ~constraints universe =
   {
     Context.universe;
     constraints;
     version_rev_compare = version_rev_compare ~prefer_oldest;
+    fresh_id = create_fun_id_fun ();
   }
 
 let solve context pkgs =
