@@ -157,6 +157,11 @@ module Raw_diagnostics = struct
     | DiagnosticsFailure of string
 
   type reject = impl * rejection_reason
+  type candidates = reject list * [`All_unusable | `No_candidates | `Conflicts]
+
+  type outcome =
+    | SelectedImpl of impl
+    | RejectedCandidates of candidates
 
   type note =
     | UserRequested of restriction
@@ -167,9 +172,8 @@ module Raw_diagnostics = struct
 
   type t = {
     role : role;
-    selected_impl : impl option;
+    outcome : outcome;
     notes : note list;
-    candidates : (reject list * [`All_unusable | `No_candidates | `Conflicts]) option;
   }
 
   let rec map_role = function
@@ -219,12 +223,11 @@ module Raw_diagnostics = struct
       let selected_impl = Option.map map_impl (Diagnostics.Component.selected_impl component) in
       {
         role = map_role (Diagnostics.Component.role component);
-        selected_impl;
-        notes = List.map map_note (Diagnostics.Component.notes component);
-        candidates = begin match selected_impl with
-          | None -> Some (map_candidates (Diagnostics.Component.rejects component))
-          | Some _ -> None
+        outcome = begin match selected_impl with
+          | Some selected_impl -> SelectedImpl selected_impl
+          | None -> RejectedCandidates (map_candidates (Diagnostics.Component.rejects component))
         end;
+        notes = List.map map_note (Diagnostics.Component.notes component);
       }
     )
 end
