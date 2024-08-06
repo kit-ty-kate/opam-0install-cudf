@@ -66,7 +66,7 @@ module Make (Context : S.CONTEXT) = struct
     let compare a b =
       match a, b with
       | Real a, Real b -> String.compare a.name b.name
-      | Virtual (a, _), Virtual (b, _) -> compare (a : int) b
+      | Virtual (a, _), Virtual (b, _) -> Int.compare a b
       | Real _, Virtual _ -> -1
       | Virtual _, Real _ -> 1
   end
@@ -80,11 +80,13 @@ module Make (Context : S.CONTEXT) = struct
       !i
 
   let virtual_impl ~context ~depends () =
-    let depends = depends |> List.map (fun (name, importance) ->
+    let depends =
+      List.map (fun (name, importance) ->
         let drole = role context name in
         let importance = (importance :> [ `Essential | `Recommended | `Restricts ]) in
         { drole; importance; restrictions = []}
-      ) in
+      ) depends
+    in
     VirtualImpl (fresh_id (), depends)
 
   let virtual_role impls =
@@ -169,21 +171,20 @@ module Make (Context : S.CONTEXT) = struct
     | Real role ->
       let context = role.context in
       let impls =
-        Context.candidates context role.name
-        |> List.filter_map (function
-            | _, Error _rejection -> None
-            | version, Ok pkg ->
+        List.filter_map (function
+          | _, Error _rejection -> None
+          | version, Ok pkg ->
               let requires =
                 let make_deps importance kind xform deps acc =
                   list_deps ~context ~importance ~kind
                     ~pname:role.name ~pver:version
                     ~acc (xform deps)
                 in
-                make_deps `Essential `Ensure ensure pkg.Cudf.depends
-                  (make_deps `Restricts `Prevent prevent pkg.Cudf.conflicts [])
+                make_deps `Essential `Ensure ensure pkg.Cudf.depends @@
+                make_deps `Restricts `Prevent prevent pkg.Cudf.conflicts []
               in
               Some (RealImpl { pkg; requires })
-          )
+          ) (Context.candidates context role.name)
       in
       { impls; replacement = None }
 
@@ -195,10 +196,13 @@ module Make (Context : S.CONTEXT) = struct
     | VirtualImpl _ -> assert false        (* Can't constrain version of a virtual impl! *)
     | Reject _ -> false
     | RealImpl impl ->
-      let result = match expr with [] -> true | _ -> List.exists (fun (c, v) -> fop c impl.pkg.Cudf.version v) expr in
-      match kind with
-      | `Ensure -> result
-      | `Prevent -> not result
+        let result = match expr with
+          | [] -> true
+          | _ -> List.exists (fun (c, v) -> fop c impl.pkg.Cudf.version v) expr
+        in
+        match kind with
+        | `Ensure -> result
+        | `Prevent -> not result
 
   type rejection = Context.rejection
 
@@ -208,25 +212,28 @@ module Make (Context : S.CONTEXT) = struct
     | Real role ->
       let context = role.context in
       let rejects =
-        Context.candidates context role.name
-        |> List.filter_map (function
-            | _, Ok _ -> None
-            | version, Error reason ->
+        List.filter_map (function
+          | _, Ok _ -> None
+          | version, Error reason ->
               let pkg = (role.name, version) in
               Some (Reject pkg, reason)
-          )
+          ) (Context.candidates context role.name)
       in
       let notes = [] in
       rejects, notes
 
   let compare_version a b =
     match a, b with
-    | RealImpl a, RealImpl b -> compare (a.pkg.Cudf.version : int) b.pkg.Cudf.version
-    | VirtualImpl (ia, _), VirtualImpl (ib, _) -> compare (ia : int) ib
-    | Reject a, Reject b -> compare (snd a : int) (snd b)
-    | (RealImpl _ | Reject _ | VirtualImpl _ | Dummy),
-      (RealImpl _ | Reject _ | VirtualImpl _ | Dummy)
-      -> compare b a
+    | RealImpl a, RealImpl b -> Int.compare a.pkg.Cudf.version b.pkg.Cudf.version
+    | VirtualImpl (ia, _), VirtualImpl (ib, _) -> Int.compare ia ib
+    | Reject (_, a), Reject (_, b) -> Int.compare a b
+    | Dummy, Dummy -> 0
+    | RealImpl _, (VirtualImpl _ | Reject _ | Dummy) -> -1
+    | VirtualImpl _, RealImpl _ -> 1
+    | VirtualImpl _, (Reject _ | Dummy) -> -1
+    | Reject _, (RealImpl _ | VirtualImpl _) -> 1
+    | Reject _, Dummy -> -1
+    | Dummy, (RealImpl _ | VirtualImpl _ | Reject _) -> 1
 
   let user_restrictions = function
     | Virtual _ -> None

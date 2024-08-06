@@ -4,7 +4,7 @@ module Context = struct
   type t = {
     universe : Cudf.universe;
     constraints : (Cudf_types.pkgname * (Cudf_types.relop * Cudf_types.version)) list;
-    prefer_oldest : bool;
+    version_rev_compare : Cudf.package -> Cudf.package -> int;
   }
 
   let user_restrictions t name =
@@ -15,30 +15,23 @@ module Context = struct
         acc
     ) [] t.constraints
 
-  let version_compare t pkg1 pkg2 =
-    if t.prefer_oldest then
-      compare (pkg1.Cudf.version : int) pkg2.Cudf.version
-    else
-      compare (pkg2.Cudf.version : int) pkg1.Cudf.version
-
   let candidates t name =
     let user_constraints = user_restrictions t name in
     match Cudf.lookup_packages t.universe name with
     | [] ->
         [] (* Package not found *)
     | versions ->
-        List.fast_sort (version_compare t) versions (* Higher versions are preferred. *)
-        |> List.map (fun pkg ->
+        List.map (fun pkg ->
           let rec check_constr = function
             | [] -> (pkg.Cudf.version, Ok pkg)
-            | ((op, v)::c) ->
+            | (op, v)::c ->
                 if Model.fop op pkg.Cudf.version v then
                   check_constr c
                 else
                   (pkg.Cudf.version, Error (UserConstraint (name, Some (op, v))))  (* Reject *)
           in
           check_constr user_constraints
-        )
+        ) (List.fast_sort t.version_rev_compare versions) (* Higher versions are preferred. *)
 
   let print_constr = function
     | None -> ""
@@ -69,8 +62,20 @@ type t = Context.t
 type selections = Solver.Output.t
 type diagnostics = Input.requirements   (* So we can run another solve *)
 
+let version_rev_compare ~prefer_oldest =
+  if prefer_oldest then
+    fun pkg1 pkg2 ->
+      Int.compare pkg1.Cudf.version pkg2.Cudf.version
+  else
+    fun pkg1 pkg2 ->
+      Int.compare pkg2.Cudf.version pkg1.Cudf.version
+
 let create ?(prefer_oldest=false) ~constraints universe =
-  { Context.universe; constraints; prefer_oldest }
+  {
+    Context.universe;
+    constraints;
+    version_rev_compare = version_rev_compare ~prefer_oldest;
+  }
 
 let solve context pkgs =
   let req = requirements ~context pkgs in
@@ -79,9 +84,8 @@ let solve context pkgs =
   | None -> Error req
 
 let diagnostics ?verbose req =
-  Solver.do_solve req ~closest_match:true
-  |> Option.get
-  |> Diagnostics.get_failure_reason ?verbose
+  Diagnostics.get_failure_reason ?verbose
+    (Option.get (Solver.do_solve req ~closest_match:true))
 
 let packages_of_result sels =
   Solver.Output.RoleMap.fold (fun _role sel acc ->
