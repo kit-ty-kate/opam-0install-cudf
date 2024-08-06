@@ -84,6 +84,8 @@ let diagnostics ?verbose req =
   |> Diagnostics.get_failure_reason ?verbose
 
 let packages_of_result sels =
-  sels
-  |> Solver.Output.to_map |> Solver.Output.RoleMap.to_seq |> List.of_seq
-  |> List.filter_map (fun (_role, sel) -> Input.version (Solver.Output.unwrap sel))
+  Solver.Output.RoleMap.fold (fun _role sel acc ->
+    match Input.version (Solver.Output.unwrap sel) with
+    | None -> acc
+    | Some v -> v :: acc
+  ) (Solver.Output.to_map sels) []

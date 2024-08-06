@@ -1,12 +1,12 @@
 (* Note: changes to this file may require similar changes to lib/model.ml *)
 
 let fop : Cudf_types.relop -> int -> int -> bool = function
-  | `Eq -> (=)
-  | `Neq -> (<>)
-  | `Geq -> (>=)
-  | `Gt -> (>)
-  | `Leq -> (<=)
-  | `Lt -> (<)
+  | `Eq -> ((=) : int -> int -> bool)
+  | `Neq -> ((<>) : int -> int -> bool)
+  | `Geq -> ((>=) : int -> int -> bool)
+  | `Gt -> ((>) : int -> int -> bool)
+  | `Leq -> ((<=) : int -> int -> bool)
+  | `Lt -> ((<) : int -> int -> bool)
 
 module Make (Context : S.CONTEXT) = struct
   type restriction = {
@@ -110,10 +110,10 @@ module Make (Context : S.CONTEXT) = struct
   let dummy_impl = Dummy
 
   (* Turn an CUDF formula into a 0install list of dependencies. *)
-  let list_deps ~context ~importance ~kind ~pname ~pver deps =
-    let rec aux = function
-      | [] -> []
-      | [[(name, _)]] when String.equal name pname -> []
+  let list_deps ~context ~importance ~kind ~pname ~pver ~acc deps =
+    let rec aux acc = function
+      | [] -> acc
+      | [[(name, _)]] when String.equal name pname -> acc
       | [[(name, c)]] ->
         let drole = role context name in
         let restrictions =
@@ -122,20 +122,20 @@ module Make (Context : S.CONTEXT) = struct
           | `Ensure, None -> []
           | kind, Some c -> [{ kind; expr = [c] }]
         in
-        [{ drole; restrictions; importance }]
-      | x::(_::_ as y) -> aux [x] @ aux y
+        { drole; restrictions; importance } :: acc
+      | x::(_::_ as y) -> aux (aux acc y) [x]
       | [o] ->
-        let impls = group_ors o in
+        let impls = group_ors [] o in
         let drole = virtual_role impls in
         (* Essential because we must apply a restriction, even if its
            components are only restrictions. *)
-        [{ drole; restrictions = []; importance = `Essential }]
-    and group_ors = function
-      | x::(_::_ as y) -> group_ors [x] @ group_ors y
-      | [expr] -> [VirtualImpl (fresh_id (), aux [[expr]])]
-      | [] -> [Reject (pname, pver)]
+        { drole; restrictions = []; importance = `Essential } :: acc
+    and group_ors acc = function
+      | x::(_::_ as y) -> group_ors (group_ors acc y) [x]
+      | [expr] -> VirtualImpl (fresh_id (), aux [] [[expr]]) :: acc
+      | [] -> Reject (pname, pver) :: acc
     in
-    aux deps
+    aux acc deps
 
   let requires _ = function
     | Dummy | Reject _ -> [], []
@@ -174,12 +174,13 @@ module Make (Context : S.CONTEXT) = struct
             | _, Error _rejection -> None
             | version, Ok pkg ->
               let requires =
-                let make_deps importance kind xform deps =
-                  xform deps
-                  |> list_deps ~context ~importance ~kind ~pname:role.name ~pver:version
+                let make_deps importance kind xform deps acc =
+                  list_deps ~context ~importance ~kind
+                    ~pname:role.name ~pver:version
+                    ~acc (xform deps)
                 in
-                make_deps `Essential `Ensure ensure pkg.Cudf.depends @
-                make_deps `Restricts `Prevent prevent pkg.Cudf.conflicts
+                make_deps `Essential `Ensure ensure pkg.Cudf.depends
+                  (make_deps `Restricts `Prevent prevent pkg.Cudf.conflicts [])
               in
               Some (RealImpl { pkg; requires })
           )
